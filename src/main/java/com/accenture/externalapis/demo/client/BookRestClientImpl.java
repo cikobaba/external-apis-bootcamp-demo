@@ -1,32 +1,103 @@
 package com.accenture.externalapis.demo.client;
 
 import com.accenture.externalapis.demo.config.ExternalServiceProperties;
+import com.accenture.externalapis.demo.dto.BookApiResponse;
+import com.accenture.externalapis.demo.dto.BookDto;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
-// TODO: Make this class implement BookRestClient.
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
+
 @Component
-public class BookRestClientImpl {
+public class BookRestClientImpl implements BookRestClient {
 
-    private RestClient restClient;
+    private final RestClient restClient;
 
-    public BookRestClientImpl(RestClient.Builder builder, ExternalServiceProperties properties) {
-        // TODO: Build the RestClient using builder.baseUrl(properties.baseUrl()).build()
-        // and assign it to this.restClient
-        //
-        // Optional/bonus: this service doesn't require auth, but in a real API you would
-        // often also add builder.defaultHeader("Authorization", "Bearer " + token) here.
+    public BookRestClientImpl(
+            RestClient.Builder builder,
+            ExternalServiceProperties properties) {
+
+        SimpleClientHttpRequestFactory factory =
+                new SimpleClientHttpRequestFactory();
+
+        factory.setConnectTimeout(Duration.ofSeconds(3));
+        factory.setReadTimeout(Duration.ofSeconds(3));
+
+        this.restClient = builder
+                .baseUrl(properties.baseUrl())
+                .requestFactory(factory)
+                .build();
     }
 
-    // TODO: Implement getBook(Long id) - fetch one book from GET /books/{id} as a
-    // BookApiResponse, then map it onto a BookDto (only keep the fields BookDto needs).
-    //
-    // TODO: Handle the main RestClient error cases and rethrow them as ClientException:
-    //  - HttpClientErrorException (4xx, e.g. book not found)
-    //  - HttpServerErrorException (5xx, e.g. the faulty/teapot book)
-    //  - ResourceAccessException (connection refused / timeout - the external service is unreachable)
+    @Override
+    public BookDto getBook(Long id) {
+        try {
+            BookApiResponse response = restClient
+                    .get()
+                    .uri("/books/{id}", id)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, (request, res) -> {
+                        throw new ClientException(
+                                "External API returned HTTP " +
+                                        res.getStatusCode().value()
+                        );
+                    })
+                    .body(BookApiResponse.class);
 
-    // TODO: Implement getAllBooks() - fetch all books from GET /books as
-    // BookApiResponse[], then map each one onto a BookDto. Handle the same error
-    // cases as getBook() above.
+            if (response == null) {
+                throw new ClientException("Empty book response");
+            }
+
+            return mapToDto(response);
+
+        } catch (RestClientException e) {
+            throw new ClientException(
+                    "Failed to fetch book with ID: " + id, e
+            );
+        }
+    }
+
+    @Override
+    public List<BookDto> getAllBooks() {
+        try {
+            BookApiResponse[] responses = restClient
+                    .get()
+                    .uri("/books")
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, (request, res) -> {
+                        throw new ClientException(
+                                "External API returned HTTP " +
+                                        res.getStatusCode().value()
+                        );
+                    })
+                    .body(BookApiResponse[].class);
+
+            if (responses == null) {
+                throw new ClientException("Empty books response");
+            }
+
+            return Arrays.stream(responses)
+                    .map(this::mapToDto)
+                    .toList();
+
+        } catch (RestClientException e) {
+            throw new ClientException(
+                    "Failed to fetch books", e
+            );
+        }
+    }
+
+    private BookDto mapToDto(BookApiResponse response) {
+        return new BookDto(
+                response.title(),
+                response.author(),
+                response.genre(),
+                response.price()
+        );
+    }
 }
